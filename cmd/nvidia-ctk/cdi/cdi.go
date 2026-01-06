@@ -19,6 +19,7 @@ package cdi
 import (
 	"github.com/urfave/cli/v3"
 
+	"github.com/NVIDIA/nvidia-container-toolkit/cmd/nvidia-ctk/cdi/apply"
 	"github.com/NVIDIA/nvidia-container-toolkit/cmd/nvidia-ctk/cdi/generate"
 	"github.com/NVIDIA/nvidia-container-toolkit/cmd/nvidia-ctk/cdi/list"
 	"github.com/NVIDIA/nvidia-container-toolkit/cmd/nvidia-ctk/cdi/transform"
@@ -49,6 +50,7 @@ func (m command) build() *cli.Command {
 			generate.NewCommand(m.logger, m.configFilePath),
 			list.NewCommand(m.logger),
 			transform.NewCommand(m.logger),
+			apply.NewCommand(m.logger),
 		},
 	}
 
