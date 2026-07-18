@@ -43,6 +43,7 @@ type options struct {
 	folders       []string
 	ldconfigPath  string
 	containerSpec string
+	containerRoot string
 }
 
 func init() {
@@ -91,6 +92,11 @@ func (m command) build() *cli.Command {
 				Usage:       "Specify the path to the OCI container spec. If empty or '-' the spec will be read from STDIN",
 				Destination: &cfg.containerSpec,
 			},
+			&cli.StringFlag{
+				Name:        "container-root",
+				Usage:       "Specify the path to the container root filesystem. If set, the OCI container spec is ignored and the ldcache is updated in this root. This is intended for use by non-OCI-compliant runtimes",
+				Destination: &cfg.containerRoot,
+			},
 		},
 	}
 
@@ -105,14 +111,9 @@ func (m command) validateFlags(_ *cli.Command, cfg *options) error {
 }
 
 func (m command) run(_ *cli.Command, cfg *options) error {
-	s, err := oci.LoadContainerState(cfg.containerSpec)
+	containerRootDir, err := m.getContainerRootDir(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to load container state: %v", err)
-	}
-
-	containerRootDir, err := s.GetContainerRoot()
-	if err != nil || containerRootDir == "" || containerRootDir == "/" {
-		return fmt.Errorf("failed to determined container root: %v", err)
+		return fmt.Errorf("failed to determine container root: %w", err)
 	}
 
 	runner, err := ldconfig.NewRunner(
@@ -125,6 +126,32 @@ func (m command) run(_ *cli.Command, cfg *options) error {
 		return err
 	}
 	return runner.Run()
+}
+
+// getContainerRootDir returns the container root filesystem to update the
+// ldcache in. If a container root is explicitly specified, it is used directly.
+// This allows the hook to be used by non-OCI-compliant runtimes that do not
+// provide an OCI container spec. Otherwise, the container root is determined
+// from the OCI container spec.
+func (m command) getContainerRootDir(cfg *options) (string, error) {
+	if cfg.containerRoot != "" {
+		return cfg.containerRoot, nil
+	}
+
+	s, err := oci.LoadContainerState(cfg.containerSpec)
+	if err != nil {
+		return "", fmt.Errorf("failed to load container state: %w", err)
+	}
+
+	containerRootDir, err := s.GetContainerRoot()
+	if err != nil {
+		return "", err
+	}
+	if containerRootDir == "" || containerRootDir == "/" {
+		return "", fmt.Errorf("invalid container root: %q", containerRootDir)
+	}
+
+	return containerRootDir, nil
 }
 
 // updateLdCacheHandler wraps updateLdCache with error handling.

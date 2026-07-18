@@ -48,6 +48,10 @@ type options struct {
 	cudaCompatContainerRoot string
 	hostDriverVersion       string
 	hostCudaVersion         string
+	// containerRoot is the path to the container root filesystem. If set, the
+	// OCI container spec is ignored and this root is used directly. This is
+	// intended for use by non-OCI-compliant runtimes.
+	containerRoot string
 	// containerSpec allows the path to the container spec to be specified for
 	// testing.
 	containerSpec string
@@ -93,6 +97,11 @@ func (m command) build() *cli.Command {
 				Destination: &options.cudaCompatContainerRoot,
 			},
 			&cli.StringFlag{
+				Name:        "container-root",
+				Usage:       "Specify the path to the container root filesystem. If set, the OCI container spec is ignored and this root is used directly. This is intended for use by non-OCI-compliant runtimes",
+				Destination: &options.containerRoot,
+			},
+			&cli.StringFlag{
 				Name:        "container-spec",
 				Hidden:      true,
 				Category:    "testing-only",
@@ -116,14 +125,9 @@ func (m command) run(_ *cli.Command, o *options) error {
 		return nil
 	}
 
-	s, err := oci.LoadContainerState(o.containerSpec)
+	containerRootDir, err := m.getContainerRootDir(o)
 	if err != nil {
-		return fmt.Errorf("failed to load container state: %w", err)
-	}
-
-	containerRootDir, err := s.GetContainerRoot()
-	if err != nil {
-		return fmt.Errorf("failed to determined container root: %w", err)
+		return fmt.Errorf("failed to determine container root: %w", err)
 	}
 
 	containerRoot, err := newRoot(containerRootDir)
@@ -141,6 +145,29 @@ func (m command) run(_ *cli.Command, o *options) error {
 	}
 
 	return m.createLdsoconfdFile(containerRoot, cudaCompatLdsoconfdFilenamePattern, containerForwardCompatDir)
+}
+
+// getContainerRootDir returns the container root filesystem to operate on. If a
+// container root is explicitly specified, it is used directly and the OCI
+// container spec is ignored. This allows the hook to be used by
+// non-OCI-compliant runtimes that do not provide an OCI container spec.
+// Otherwise, the container root is determined from the OCI container spec.
+func (m command) getContainerRootDir(o *options) (string, error) {
+	if o.containerRoot != "" {
+		return o.containerRoot, nil
+	}
+
+	s, err := oci.LoadContainerState(o.containerSpec)
+	if err != nil {
+		return "", fmt.Errorf("failed to load container state: %w", err)
+	}
+
+	containerRootDir, err := s.GetContainerRoot()
+	if err != nil {
+		return "", err
+	}
+
+	return containerRootDir, nil
 }
 
 func (m command) getContainerForwardCompatDir(containerRoot *root, o *options) (string, error) {

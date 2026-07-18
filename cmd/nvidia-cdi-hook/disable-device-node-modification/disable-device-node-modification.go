@@ -38,6 +38,7 @@ const (
 )
 
 type options struct {
+	containerRoot string
 	containerSpec string
 }
 
@@ -55,6 +56,11 @@ func NewCommand(logger logger.Interface) *cli.Command {
 			return run(ctx, cmd, &cfg)
 		},
 		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:        "container-root",
+				Usage:       "Specify the path to the container root filesystem. If set, the OCI container spec is ignored and this root is used directly. This is intended for use by non-OCI-compliant runtimes",
+				Destination: &cfg.containerRoot,
+			},
 			&cli.StringFlag{
 				Name:        "container-spec",
 				Hidden:      true,
@@ -80,14 +86,9 @@ func run(_ context.Context, _ *cli.Command, cfg *options) error {
 		return nil
 	}
 
-	s, err := oci.LoadContainerState(cfg.containerSpec)
+	containerRootDirPath, err := getContainerRootDir(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to load container state: %w", err)
-	}
-
-	containerRootDirPath, err := s.GetContainerRoot()
-	if err != nil {
-		return fmt.Errorf("failed to determined container root: %w", err)
+		return fmt.Errorf("failed to determine container root: %w", err)
 	}
 
 	containerRoot, err := os.OpenRoot(containerRootDirPath)
@@ -97,6 +98,29 @@ func run(_ context.Context, _ *cli.Command, cfg *options) error {
 	defer containerRoot.Close()
 
 	return createParamsFileInContainer(containerRoot, modifiedParamsFileContents)
+}
+
+// getContainerRootDir returns the container root filesystem to operate on. If a
+// container root is explicitly specified, it is used directly and the OCI
+// container spec is ignored. This allows the hook to be used by
+// non-OCI-compliant runtimes that do not provide an OCI container spec.
+// Otherwise, the container root is determined from the OCI container spec.
+func getContainerRootDir(cfg *options) (string, error) {
+	if cfg.containerRoot != "" {
+		return cfg.containerRoot, nil
+	}
+
+	s, err := oci.LoadContainerState(cfg.containerSpec)
+	if err != nil {
+		return "", fmt.Errorf("failed to load container state: %w", err)
+	}
+
+	containerRootDirPath, err := s.GetContainerRoot()
+	if err != nil {
+		return "", err
+	}
+
+	return containerRootDirPath, nil
 }
 
 func getModifiedNVIDIAParamsContents() ([]byte, error) {

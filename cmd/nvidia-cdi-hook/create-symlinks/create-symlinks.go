@@ -38,6 +38,7 @@ type command struct {
 type config struct {
 	links         []string
 	containerSpec string
+	containerRoot string
 }
 
 // NewCommand constructs a hook command with the specified logger
@@ -64,6 +65,11 @@ func (m command) build() *cli.Command {
 				Usage:       "Specify a specific link to create. The link is specified as target::link. If the link exists in the container root, it is removed.",
 				Destination: &cfg.links,
 			},
+			&cli.StringFlag{
+				Name:        "container-root",
+				Usage:       "Specify the path to the container root filesystem. If set, the OCI container spec is ignored and symlinks are created in this root. This is intended for use by non-OCI-compliant runtimes",
+				Destination: &cfg.containerRoot,
+			},
 			// The following flags are testing-only flags.
 			&cli.StringFlag{
 				Name:        "container-spec",
@@ -78,14 +84,9 @@ func (m command) build() *cli.Command {
 }
 
 func (m command) run(_ *cli.Command, cfg *config) error {
-	s, err := oci.LoadContainerState(cfg.containerSpec)
+	containerRoot, err := m.getContainerRootDir(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to load container state: %v", err)
-	}
-
-	containerRoot, err := s.GetContainerRoot()
-	if err != nil {
-		return fmt.Errorf("failed to determined container root: %v", err)
+		return fmt.Errorf("failed to determine container root: %w", err)
 	}
 
 	created := make(map[string]bool)
@@ -106,6 +107,29 @@ func (m command) run(_ *cli.Command, cfg *config) error {
 		created[l] = true
 	}
 	return nil
+}
+
+// getContainerRootDir returns the container root filesystem to create the
+// symlinks in. If a container root is explicitly specified, it is used directly
+// and the OCI container spec is ignored. This allows the hook to be used by
+// non-OCI-compliant runtimes that do not provide an OCI container spec.
+// Otherwise, the container root is determined from the OCI container spec.
+func (m command) getContainerRootDir(cfg *config) (string, error) {
+	if cfg.containerRoot != "" {
+		return cfg.containerRoot, nil
+	}
+
+	s, err := oci.LoadContainerState(cfg.containerSpec)
+	if err != nil {
+		return "", fmt.Errorf("failed to load container state: %w", err)
+	}
+
+	containerRoot, err := s.GetContainerRoot()
+	if err != nil {
+		return "", err
+	}
+
+	return containerRoot, nil
 }
 
 // createLink creates a symbolic link in the specified container root.
