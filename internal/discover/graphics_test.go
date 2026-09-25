@@ -385,3 +385,47 @@ func TestIsDriverLibrary(t *testing.T) {
 
 	}
 }
+
+// Issue #554 reported a doubled driver-root prefix when discovering X.Org
+// modules from the host filesystem exposed inside a Snap.
+func TestGraphicsLibrariesDiscovererWithSnapHostRoot(t *testing.T) {
+	logger, _ := testlog.NewNullLogger()
+	tempRoot, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	driverRoot := filepath.Join(tempRoot, "var/lib/snapd/hostfs")
+	libDir := "/usr/lib/aarch64-linux-gnu"
+	xorgDir := filepath.Join(libDir, "nvidia/xorg")
+	const version = "535.161.08"
+	modulePaths := []string{
+		filepath.Join(xorgDir, "nvidia_drv.so"),
+		filepath.Join(xorgDir, "libglxserver_nvidia.so."+version),
+	}
+	for _, path := range append([]string{filepath.Join(libDir, "libcuda.so."+version)}, modulePaths...) {
+		hostPath := filepath.Join(driverRoot, path)
+		require.NoError(t, os.MkdirAll(filepath.Dir(hostPath), 0755))
+		require.NoError(t, os.WriteFile(hostPath, nil, 0600))
+	}
+
+	driver := root.New(root.WithLogger(logger), root.WithDriverRoot(driverRoot))
+	d, err := newGraphicsLibrariesDiscoverer(logger, driver, NewHookCreator())
+	require.NoError(t, err)
+
+	mounts, err := d.Mounts()
+	require.NoError(t, err)
+	require.Len(t, mounts, len(modulePaths))
+	for _, path := range modulePaths {
+		require.Contains(t, mounts, Mount{
+			HostPath: filepath.Join(driverRoot, path),
+			Path:     path,
+			Options:  []string{"ro", "nosuid", "nodev", "rbind", "rprivate"},
+		})
+	}
+
+	hooks, err := d.Hooks()
+	require.NoError(t, err)
+	require.Len(t, hooks, 1)
+	require.Equal(t, []string{
+		"nvidia-cdi-hook", "create-symlinks", "--link",
+		"libglxserver_nvidia.so." + version + "::" + filepath.Join(xorgDir, "libglxserver_nvidia.so"),
+	}, hooks[0].Args)
+}
